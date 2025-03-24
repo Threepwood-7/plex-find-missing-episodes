@@ -19,7 +19,8 @@ TVDB_APIKEY = ""  # Your TVDB API key
 
 # Cache settings
 CACHE_DIR = "./cache"
-CACHE_EXPIRY_DAYS = 14
+CACHE_EXPIRY_DAYS = 30  # how long to cache the TVDB data
+LIBRARY_TITLE_FILTER = re.compile("TV .*", re.IGNORECASE)  # filter show libraries that match the regex here
 
 # Ensure cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -92,7 +93,8 @@ def setup_worksheets():
         "Number of Episodes",
         "Episode Number",
         "Episode Aired Date",
-        "Is Plex Missing",
+        "Is Plex Missing (Episode)",
+        "Is Plex Missing (Season)",
         "Is Plex Duplicate",
         "Episode Title",
         "File on Disk",
@@ -100,6 +102,8 @@ def setup_worksheets():
 
     for col, header in enumerate(headers):
         main_sheet.write(0, col, header, header_format)
+
+    main_sheet.set_column("A:Z", 20)
 
     # Configure filters and freeze panes
     main_sheet.autofilter(0, 0, 0, len(headers) - 1)
@@ -309,6 +313,15 @@ def process_show(show, plex_library_title, tvdb_client, row_index):
 
         safe_print(f"Processing Season {season_num} of {show_title} ({len(episodes)} episodes)")
 
+        is_season_missing = True
+
+        for episode in episodes:
+            if season_num in plex_episodes and episode_num in plex_episodes[season_num]:
+                # if there is at least one episode for the season, then the season is not missing, so we might have holes in the episodes
+                if is_season_missing:
+                    is_season_missing = False
+                    break
+
         for episode in episodes:
             episode_num = episode.get("number")
             episode_title = episode.get("name", "")
@@ -319,12 +332,13 @@ def process_show(show, plex_library_title, tvdb_client, row_index):
                 air_date = ""
 
             # Check if this episode exists in Plex
-            is_missing = True
+            is_episode_missing = True
             is_duplicate = False
             file_path = ""
 
             if season_num in plex_episodes and episode_num in plex_episodes[season_num]:
-                is_missing = False
+                is_episode_missing = False
+
                 plex_episode = plex_episodes[season_num][episode_num]
 
                 # Check for duplicates
@@ -347,10 +361,11 @@ def process_show(show, plex_library_title, tvdb_client, row_index):
             main_sheet.write(row_index, 6, len(episodes))
             main_sheet.write(row_index, 7, episode_num)
             main_sheet.write(row_index, 8, air_date)
-            main_sheet.write_boolean(row_index, 9, is_missing)
-            main_sheet.write_boolean(row_index, 10, is_duplicate)
-            main_sheet.write_string(row_index, 11, episode_title)
-            main_sheet.write_string(row_index, 12, file_path)
+            main_sheet.write_boolean(row_index, 9, is_episode_missing)
+            main_sheet.write_boolean(row_index, 10, is_season_missing)
+            main_sheet.write_boolean(row_index, 11, is_duplicate)
+            main_sheet.write_string(row_index, 12, episode_title)
+            main_sheet.write_string(row_index, 13, file_path)
 
             row_index += 1
 
@@ -377,7 +392,7 @@ def main():
 
         # Get all TV libraries
         safe_print("Fetching Plex libraries")
-        libraries = [section for section in plex.library.sections() if section.type == "show"]
+        libraries = [section for section in plex.library.sections() if section.type == "show" and LIBRARY_TITLE_FILTER.match(section.title)]
         safe_print(f"Finished fetching Plex libraries")
 
         if not libraries:
