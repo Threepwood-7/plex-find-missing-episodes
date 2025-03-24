@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from plexapi.server import PlexServer
 import tvdb_v4_official
 import xlsxwriter
+from pathlib import Path
 
 # Configuration - Replace these with your actual values
 PLEX_URL = "http://localhost:32400"  # Change to your Plex server URL
@@ -257,29 +258,32 @@ def process_show(show, plex_library_title, tvdb_client, row_index):
                 plex_episodes[season_num] = {}
                 plex_episodes_count[season_num] = {}
 
-            # Track episodes for duplicate detection
-            if episode_num not in plex_episodes_count[season_num]:
-                plex_episodes_count[season_num][episode_num] = 1
-            else:
-                plex_episodes_count[season_num][episode_num] += 1
+            for media_part in episode.iterParts():
+                episode_file_path = str(Path(media_part.file.replace("\\?\\", "")).absolute())
 
-            # If this is a duplicate, append to existing entry
-            if episode_num in plex_episodes[season_num]:
-                existing_ep = plex_episodes[season_num][episode_num]
+                # Track episodes for duplicate detection
+                if episode_num not in plex_episodes_count[season_num]:
+                    plex_episodes_count[season_num][episode_num] = 1
+                else:
+                    plex_episodes_count[season_num][episode_num] += 1
 
-                # Combine file paths
-                if hasattr(episode, "locations") and episode.locations:
-                    if hasattr(existing_ep, "combined_locations"):
-                        existing_ep.combined_locations.extend(episode.locations)
-                    else:
-                        existing_ep.combined_locations = existing_ep.locations + episode.locations
-            else:
-                # Store the episode
-                plex_episodes[season_num][episode_num] = episode
+                # If this is a duplicate, append to existing entry
+                if episode_num in plex_episodes[season_num]:
+                    existing_ep = plex_episodes[season_num][episode_num]
 
-                # Initialize combined_locations if needed
-                if hasattr(episode, "locations") and episode.locations:
-                    episode.combined_locations = episode.locations
+                    # Combine file paths
+                    if hasattr(episode, "locations") and episode.locations:
+                        if hasattr(existing_ep, "combined_locations"):
+                            existing_ep.combined_locations.extend([episode_file_path])
+                        else:
+                            existing_ep.combined_locations = [episode_file_path]
+                else:
+                    # Store the episode
+                    plex_episodes[season_num][episode_num] = episode
+
+                    # Initialize combined_locations if needed
+                    if hasattr(episode, "locations") and episode.locations:
+                        episode.combined_locations = [episode_file_path]
 
         safe_print(f"Finished fetching episodes for {show_title} from Plex API")
     except Exception as e:
@@ -298,6 +302,10 @@ def process_show(show, plex_library_title, tvdb_client, row_index):
         season_num = season_data.get("number")
         season_name = season_data.get("name", "")
         episodes = season_data.get("episodes", [])
+
+        if not episodes:
+            safe_print(f"Skipping Season {season_num} of {show_title} - 'episodes' is missing!")
+            continue
 
         safe_print(f"Processing Season {season_num} of {show_title} ({len(episodes)} episodes)")
 
@@ -325,9 +333,9 @@ def process_show(show, plex_library_title, tvdb_client, row_index):
 
                 # Get file path(s)
                 if hasattr(plex_episode, "combined_locations") and plex_episode.combined_locations:
-                    file_path = "|".join(plex_episode.combined_locations)
-                elif hasattr(plex_episode, "locations") and plex_episode.locations:
-                    file_path = "|".join(plex_episode.locations)
+                    file_path = "\n".join(plex_episode.combined_locations)
+                elif hasattr(plex_episode, "locations") and plex_episode.locations:  # this should never be ?
+                    file_path = "\n".join(plex_episode.locations)
 
             # Write to the main sheet using appropriate write methods
             main_sheet.write_string(row_index, 0, plex_library_title)
@@ -398,13 +406,18 @@ def main():
                     safe_print("Terminating early due to user interrupt")
                     break
 
-                row_index = process_show(show, library_title, tvdb, row_index)
+                try:
+                    row_index = process_show(show, library_title, tvdb, row_index)
+                except Exception as e1:
+                    safe_print(f"Error (I): {str(e1)}")
+                    print(e1)
 
             if terminate:
                 break
 
     except Exception as e:
-        safe_print(f"Error: {str(e)}")
+        safe_print(f"Error (O): {str(e)}")
+        print(e)
 
     finally:
         # Save the workbook
